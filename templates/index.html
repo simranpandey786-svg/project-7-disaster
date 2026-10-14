@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Is this tweet about a real disaster?</title>
+<style>
+  :root {
+    --paper: #f3f4f1; --panel: #ffffff; --ink: #17212b; --muted: #5b6670;
+    --rule: #c8cdd1; --alert: #b3261e; --calm: #2e6f5e; --focus: #1f4e8c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #12181e; --panel: #1a222a; --ink: #e8ecef; --muted: #9aa5ae;
+      --rule: #2d3740; --alert: #ef7b72; --calm: #6fc2ab; --focus: #8db4ee;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 42rem; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+  h1 {
+    font: 600 2.1rem/1.15 "Iowan Old Style", Palatino, Georgia, serif;
+    margin: 0 0 .6rem; letter-spacing: -.01em;
+  }
+  .lede { color: var(--muted); margin: 0 0 2rem; max-width: 36rem; }
+  label { display: block; font-weight: 600; margin-bottom: .4rem; }
+  textarea {
+    width: 100%; min-height: 8rem; padding: .8rem .9rem; resize: vertical;
+    font: inherit; color: inherit; background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 6px;
+  }
+  textarea:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .row { display: flex; align-items: center; gap: 1rem; margin-top: .75rem; flex-wrap: wrap; }
+  .count { color: var(--muted); font-size: .875rem; margin-left: auto; }
+  button.primary {
+    font: inherit; font-weight: 600; padding: .6rem 1.2rem; cursor: pointer;
+    background: var(--ink); color: var(--paper); border: 0; border-radius: 6px;
+  }
+  button.primary:disabled { opacity: .55; cursor: progress; }
+  .examples { margin-top: 1.5rem; }
+  .examples p { margin: 0 0 .4rem; color: var(--muted); font-size: .9rem; }
+  .examples button {
+    font: inherit; font-size: .9rem; text-align: left; cursor: pointer; color: inherit;
+    background: transparent; border: 1px solid var(--rule); border-radius: 6px;
+    padding: .35rem .6rem; margin: 0 .4rem .4rem 0;
+  }
+  .examples button:hover { border-color: var(--ink); }
+  #result { margin-top: 2.25rem; border-top: 1px solid var(--rule); padding-top: 1.5rem; }
+  #result[hidden], #error[hidden] { display: none; }
+  .verdict { font: 600 1.6rem/1.2 "Iowan Old Style", Palatino, Georgia, serif; margin: 0 0 1.25rem; }
+  .verdict.disaster { color: var(--alert); }
+  .verdict.calm { color: var(--calm); }
+  .model { margin-bottom: 1rem; }
+  .model-head { display: flex; justify-content: space-between; font-size: .95rem; margin-bottom: .3rem; }
+  .model-head span:last-child { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .track { position: relative; height: 10px; background: var(--rule); border-radius: 5px; }
+  .fill { height: 100%; border-radius: 5px; transition: width .35s ease; }
+  .fill.disaster { background: var(--alert); }
+  .fill.calm { background: var(--calm); }
+  .tick { position: absolute; left: 50%; top: -4px; bottom: -4px; width: 2px; background: var(--ink); opacity: .55; }
+  .note { color: var(--muted); font-size: .875rem; margin-top: 1.25rem; }
+  .error { color: var(--alert); margin-top: 1rem; }
+  @media (prefers-reduced-motion: reduce) { .fill { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Is this tweet about a real disaster?</h1>
+  <p class="lede">Paste a tweet. The models estimate how likely it is to report an actual emergency rather than use a word like "fire" or "flood" figuratively.</p>
+
+  <form id="form">
+    <label for="tweet">Tweet text</label>
+    <textarea id="tweet" maxlength="{{ max_chars }}" placeholder="e.g. Forest fire near La Ronge Sask. Canada"></textarea>
+    <div class="row">
+      <button class="primary" id="submit" type="submit">Classify tweet</button>
+      <span class="count" id="count">0 / {{ max_chars }}</span>
+    </div>
+  </form>
+
+  <div class="examples">
+    <p>Try an example</p>
+    {% for ex in examples %}<button type="button" class="example" data-text="{{ ex }}">{{ ex }}</button>{% endfor %}
+  </div>
+
+  <p class="error" id="error" role="alert" hidden></p>
+
+  <section id="result" aria-live="polite" hidden>
+    <p class="verdict" id="verdict"></p>
+    <div id="models"></div>
+    <p class="note">Each bar shows the probability that the tweet is a real disaster. The line marks 50%, the cut-off for a "disaster" label.</p>
+  </section>
+</main>
+
+<script>
+  const MAX = {{ max_chars }};
+  const box = document.getElementById("tweet");
+  const form = document.getElementById("form");
+  const submit = document.getElementById("submit");
+  const count = document.getElementById("count");
+  const errorEl = document.getElementById("error");
+  const result = document.getElementById("result");
+  const verdict = document.getElementById("verdict");
+  const models = document.getElementById("models");
+
+  box.addEventListener("input", () => { count.textContent = box.value.length + " / " + MAX; });
+
+  document.querySelectorAll(".example").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      box.value = btn.dataset.text;
+      box.dispatchEvent(new Event("input"));
+      form.requestSubmit();
+    });
+  });
+
+  function showError(message) {
+    errorEl.textContent = message;
+    errorEl.hidden = false;
+    result.hidden = true;
+  }
+
+  function render(data) {
+    errorEl.hidden = true;
+    const lead = data.results[0];
+    const isDisaster = lead.label === "disaster";
+    verdict.textContent = isDisaster ? "Likely a real disaster report" : "Probably not a disaster";
+    verdict.className = "verdict " + (isDisaster ? "disaster" : "calm");
+
+    models.replaceChildren();
+    data.results.forEach((r) => {
+      const pct = Math.round(r.probability * 1000) / 10;
+      const kind = r.label === "disaster" ? "disaster" : "calm";
+
+      const wrap = document.createElement("div");
+      wrap.className = "model";
+
+      const head = document.createElement("div");
+      head.className = "model-head";
+      const name = document.createElement("span");
+      name.textContent = r.model;
+      const value = document.createElement("span");
+      value.textContent = pct.toFixed(1) + "% disaster";
+      head.append(name, value);
+
+      const track = document.createElement("div");
+      track.className = "track";
+      const fill = document.createElement("div");
+      fill.className = "fill " + kind;
+      fill.style.width = "0%";
+      const tick = document.createElement("div");
+      tick.className = "tick";
+      track.append(fill, tick);
+
+      wrap.append(head, track);
+      models.append(wrap);
+      requestAnimationFrame(() => { fill.style.width = pct + "%"; });
+    });
+    result.hidden = false;
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = box.value.trim();
+    if (!text) { showError("Paste a tweet to classify."); return; }
+    submit.disabled = true;
+    submit.textContent = "Classifying...";
+    try {
+      const res = await fetch("/api/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!res.ok) showError(data.error || "Something went wrong. Try again.");
+      else render(data);
+    } catch (err) {
+      showError("Could not reach the server. Check that the app is running.");
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "Classify tweet";
+    }
+  });
+</script>
+</body>
+</html>
